@@ -1,6 +1,6 @@
 import os
 import json
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, Producer
 import socket
 from dotenv import load_dotenv
 from pathlib import Path
@@ -9,12 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
-
 current_dir = Path(__file__).resolve().parent
 env_path = current_dir.parent / '.env' 
 load_dotenv(dotenv_path=env_path)
-
-# 3. Load it explicitly
 
 DB_USER = os.getenv('DB_USER')
 DB_PASSWORD = os.getenv('DB_PASSWORD')
@@ -26,7 +23,8 @@ DB_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 Base = declarative_base()
 engine = create_engine(DB_URL)
 Session = sessionmaker(bind = engine)
-TOPIC_NAME = 'raw-jobs'
+CONSUMER_TOPIC = 'raw-jobs'
+PRODUCER_TOPIC = 'high-value-jobs'
 
 conf = {
     'bootstrap.servers': 'localhost:29092',
@@ -54,16 +52,27 @@ def analyze_job(job_data):
         return 80
     else:
         return 0
+    
+# Function to handle delivery status of high-value job messages
+def delivered_status(err, msg):
+    if err is not None:
+        print(f"Message delivery failed: {err}")
+    else:
+        print(f"Message delivered to {msg.topic()} at offset {msg.offset()}")
+        print(f"Message content: {msg.value().decode('utf-8')}")
 
 # Create tables if they don't exist
 Base.metadata.create_all(engine)
 
 #Consume messages and save to database if score is greater than threshold (currently 50)
 consumer = Consumer(conf)
-consumer.subscribe([TOPIC_NAME])
+consumer.subscribe([CONSUMER_TOPIC])
+
+producer = Producer(conf)
 
 try: 
     while True:
+        producer.poll(0)
         msg = consumer.poll(1.0)
         if msg is None:
             continue
@@ -85,6 +94,7 @@ try:
         url = job_data.get("url", "N/A")
         score = analyze_job(job_data)
 
+        # If score is greater than threshold, save to DB and produce to high-value topic
         if score > 50: 
             print(f"Match: job_title='{job_title} - {url}' with a score of {score}")
 
@@ -99,6 +109,14 @@ try:
                 session.add(new_job)
                 session.commit()
                 print(f"Inserted job into database: {job_title} at {company}")
+
+                # Produce to high-value jobs topic
+                producer.produce(
+                    PRODUCER_TOPIC, 
+                    key=url, 
+                    value=json.dumps(job_data).encode('utf-8'), 
+                    callback=delivered_status
+                )
 
             except IntegrityError:
                 session.rollback()
@@ -118,3 +136,5 @@ except KeyboardInterrupt:
 finally: 
     consumer.close()
     print("Consumer has been closed")
+    producer.flush()
+    print("Producer has been flushed")
