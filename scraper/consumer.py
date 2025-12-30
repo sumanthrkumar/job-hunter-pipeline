@@ -29,7 +29,7 @@ PRODUCER_TOPIC = 'high-value-jobs'
 conf = {
     'bootstrap.servers': 'localhost:29092',
     'client.id': socket.gethostname(),
-    'group.id': 'job-hunter-consumer2',
+    'group.id': 'job-hunter-consumer5',
     'auto.offset.reset': 'earliest'
 }
 
@@ -93,6 +93,7 @@ try:
         company = job_data.get("company", "N/A")
         url = job_data.get("url", "N/A")
         score = analyze_job(job_data)
+        job_data["score"] = score
 
         # If score is greater than threshold, save to DB and produce to high-value topic
         if score > 50: 
