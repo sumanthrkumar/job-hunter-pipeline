@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, declarative_base
-
+from ai_scorer import score_job, load_resume_pdf
 
 current_dir = Path(__file__).resolve().parent
 env_path = current_dir.parent / '.env' 
@@ -26,10 +26,12 @@ Session = sessionmaker(bind = engine)
 CONSUMER_TOPIC = 'raw-jobs'
 PRODUCER_TOPIC = 'high-value-jobs'
 
+resume_pdf_path = current_dir.parent / 'resources' / 'Resume.pdf'
+
 conf = {
     'bootstrap.servers': 'localhost:29092',
     'client.id': socket.gethostname(),
-    'group.id': 'job-hunter-consumer5',
+    'group.id': 'job-hunter-consumer8',
     'auto.offset.reset': 'earliest'
 }
 
@@ -41,17 +43,6 @@ class JobPosting(Base):
     company = Column(String)
     url = Column(String, unique = True)
     score = Column(Integer)
-
-# Function to assign scores to jobs based on keywords
-def analyze_job(job_data):
-    title = job_data.get("title", "N/A").lower()
-
-    if "java" in title or "backend" in title or "back-end" in title:
-        return 100
-    if  "python" in title or "full stack" in title: 
-        return 80
-    else:
-        return 0
     
 # Function to handle delivery status of high-value job messages
 def delivered_status(err, msg):
@@ -69,6 +60,10 @@ consumer = Consumer(conf)
 consumer.subscribe([CONSUMER_TOPIC])
 
 producer = Producer(conf)
+
+# Load resume content to pass to ai_scorer
+resume = load_resume_pdf(resume_pdf_path)
+print("Resume loaded!")
 
 try: 
     while True:
@@ -92,7 +87,8 @@ try:
         job_title = job_data.get("title", "N/A")
         company = job_data.get("company", "N/A")
         url = job_data.get("url", "N/A")
-        score = analyze_job(job_data)
+
+        score, explanation = score_job(job_title, company, resume)
         job_data["score"] = score
 
         # If score is greater than threshold, save to DB and produce to high-value topic
